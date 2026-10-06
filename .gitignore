@@ -1,0 +1,13 @@
+.env
+backend/.env
+**/data/
+**/target/
+**/node_modules/
+frontend/dist/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.key
+.DS_Store
+.tdlib-build/

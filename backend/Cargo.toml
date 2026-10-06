@@ -1,0 +1,59 @@
+[package]
+name = "itclub-cloud"
+version = "0.4.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[features]
+# webauthn-rs uses OpenSSL even though HTTP downloads use Rustls.
+# Build OpenSSL from source by default; use --no-default-features for system OpenSSL.
+default = ["vendored-openssl"]
+vendored-openssl = ["openssl/vendored"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+argon2 = "0.5"
+aes-gcm = "0.10"
+async-stream = "0.3"
+axum = { version = "0.8", features = ["multipart", "ws"] }
+base64 = "0.22"
+bytes = "1"
+chrono = { version = "0.4", features = ["serde"] }
+dotenvy = "0.15"
+futures-util = "0.3"
+hex = "0.4"
+hmac = "0.12"
+httpdate = "1"
+libloading = "0.8"
+libc = "0.2"
+mime_guess = "2"
+md-5 = "0.10"
+moka = { version = "0.12", features = ["future"] }
+# Unifies the vendored feature with webauthn-rs's transitive OpenSSL dependency.
+openssl = "0.10"
+percent-encoding = "2"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+scraper = "0.23"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "derive", "migrate", "macros"] }
+subtle = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io", "rt"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors", "limit"] }
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+webauthn-rs = "0.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

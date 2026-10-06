@@ -1,0 +1,85 @@
+CREATE TABLE IF NOT EXISTS users (
+ id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+ password_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'user',
+ quota_bytes INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0,
+ api_hash TEXT UNIQUE, s3_access TEXT UNIQUE, s3_secret TEXT,
+ telegram_user_id INTEGER UNIQUE, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+ token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS nodes (
+ id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ parent_id TEXT REFERENCES nodes(id), name TEXT NOT NULL, kind TEXT NOT NULL,
+ size INTEGER NOT NULL DEFAULT 0, mime TEXT NOT NULL DEFAULT 'application/octet-stream',
+ etag TEXT NOT NULL DEFAULT '', deleted_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS node_live_name ON nodes(owner, COALESCE(parent_id, ''), name) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS node_owner_parent ON nodes(owner,parent_id);
+CREATE TABLE IF NOT EXISTS parts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+ part_index INTEGER NOT NULL, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+ account TEXT NOT NULL DEFAULT 'main', size INTEGER NOT NULL,
+ UNIQUE(node_id, part_index)
+);
+CREATE TABLE IF NOT EXISTS shares (
+ token TEXT PRIMARY KEY, node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+ owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ password_hash TEXT, expires_at INTEGER, downloads INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS share_sessions (
+ token_hash TEXT PRIMARY KEY, share_token TEXT NOT NULL REFERENCES shares(token) ON DELETE CASCADE,
+ expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS jobs (
+ id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL, parent_id TEXT, size INTEGER NOT NULL DEFAULT 0,
+ mime TEXT NOT NULL DEFAULT 'application/octet-stream', status TEXT NOT NULL,
+ progress INTEGER NOT NULL DEFAULT 0, bytes_done INTEGER NOT NULL DEFAULT 0,
+ error TEXT, node_id TEXT, source TEXT, part_size INTEGER NOT NULL DEFAULT 268435456, chunk_size INTEGER NOT NULL DEFAULT 8388608,
+ replace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS chunks (
+ job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, chunk_index INTEGER NOT NULL,
+ size INTEGER NOT NULL, PRIMARY KEY(job_id,chunk_index)
+);
+CREATE TABLE IF NOT EXISTS job_parts (
+ job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE, part_index INTEGER NOT NULL,
+ chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, account TEXT NOT NULL, size INTEGER NOT NULL,
+ PRIMARY KEY(job_id,part_index)
+);
+CREATE TABLE IF NOT EXISTS bot_accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, token TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS passkeys (
+ id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL, credential TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, action TEXT NOT NULL,
+ detail TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS multipart (
+ id TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ object_key TEXT NOT NULL, mime TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS multipart_parts (
+ upload_id TEXT NOT NULL REFERENCES multipart(id) ON DELETE CASCADE,
+ part_number INTEGER NOT NULL, size INTEGER NOT NULL, etag TEXT NOT NULL,
+ PRIMARY KEY(upload_id,part_number)
+);
+CREATE TABLE IF NOT EXISTS dav_locks (
+ path TEXT NOT NULL, owner TEXT NOT NULL, token TEXT PRIMARY KEY, expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gc_messages (
+ chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL, account TEXT NOT NULL,
+ attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT, PRIMARY KEY(chat_id,message_id)
+);
+CREATE TABLE IF NOT EXISTS link_codes (
+ token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ expires_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS inbox_receipts (
+ account TEXT NOT NULL, chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+ job_id TEXT, PRIMARY KEY(account,chat_id,message_id)
+);

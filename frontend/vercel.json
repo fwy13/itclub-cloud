@@ -1,0 +1,16 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "http://36.50.55.214:8091/api/:path*"
+    },
+    {
+      "source": "/healthz",
+      "destination": "http://36.50.55.214:8091/healthz"
+    },
+    {
+      "source": "/((?!api(?:/|$)|healthz$|assets(?:/|$)|brand(?:/|$)|favicon\\.svg$).*)",
+      "destination": "/index.html"
+    }
+  ]
+}

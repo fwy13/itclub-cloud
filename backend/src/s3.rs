@@ -167,9 +167,9 @@ async fn multipart_operation(app:&App,u:&User,key:&str,id:&str,q:&Query,method:M
         Method::PUT=>{
             let number=q.get("partNumber").and_then(|s|s.parse::<i64>().ok()).filter(|n|(1..=10000).contains(n)).ok_or_else(||Error::bad("Invalid partNumber"))?;
             if headers.contains_key("x-amz-copy-source"){return Err(Error(StatusCode::NOT_IMPLEMENTED,"UploadPartCopy chưa hỗ trợ".into()));}
-            let path=app.cfg.data.join("temp").join(format!("mp-{id}-{number}.part"));let temp=path.with_extension("writing");let mut out=tokio::fs::File::create(&temp).await?;
+            let path=app.cfg.data.join("temp").join(format!("mp-{id}-{number}.part"));let temp=path.with_extension("writing");let _cleanup=crate::archives::RemoveOnDrop(temp.clone());let mut out=tokio::fs::File::create(&temp).await?;
             let mut stream=body.into_data_stream();let mut size=0u64;let mut sha=Sha256::new();let mut md5=Md5::new();
-            while let Some(chunk)=stream.next().await{let b=chunk.map_err(|e|Error::bad(e.to_string()))?;size+=b.len() as u64;if size>app.cfg.max_upload.min(5*1024*1024*1024){return Err(Error::bad("Part quá lớn"));}sha.update(&b);md5.update(&b);out.write_all(&b).await?;}
+            while let Some(chunk)=stream.next().await{let b=chunk.map_err(|e|Error::bad(e.to_string()))?;size+=b.len() as u64;if size>app.cfg.max_upload.min(5*1024*1024*1024){return Err(Error::bad("Part quá lớn"));}sha.update(&b);md5.update(&b);crate::disk::write(app,&mut out,&b,true).await?;}
             out.sync_all().await?;drop(out);if payload!="UNSIGNED-PAYLOAD"&&hex::encode(sha.finalize())!=payload{let _=tokio::fs::remove_file(&temp).await;return Err(Error::bad("Payload hash mismatch"));}
             let etag=hex::encode(md5.finalize());tokio::fs::rename(temp,path).await?;
             sqlx::query("INSERT INTO multipart_parts(upload_id,part_number,size,etag) VALUES(?,?,?,?) ON CONFLICT(upload_id,part_number) DO UPDATE SET size=excluded.size,etag=excluded.etag").bind(id).bind(number).bind(size as i64).bind(&etag).execute(&app.db).await?;
@@ -190,7 +190,7 @@ async fn multipart_operation(app:&App,u:&User,key:&str,id:&str,q:&Query,method:M
             }
             if total as u64>app.cfg.max_upload{return Err(Error::bad("File quá lớn"));}
             let (dir,name)=webdav::split(key)?;let parent=db::ensure_path(&app.db,&u.id,&dir).await?;let old=db::resolve_path(&app.db,&u.id,key).await.ok().flatten();webdav::preconditions(headers,old.as_ref())?;
-            let job=storage::create_job(app,u,&name,parent,total,&mime,"staging",old.map(|n|n.id)).await?;let mut out=tokio::fs::File::create(app.cfg.upload_path(&job.id)).await?;
+            let job=storage::create_job(app,u,&name,parent,total,&mime,"staging",old.map(|n|n.id)).await?;let mut out=match crate::disk::create_sized(app,&app.cfg.upload_path(&job.id),total as u64,true).await{Ok(file)=>file,Err(e)=>{app.progress(&job.id,"error",0,total as u64,Some(&e.1)).await;return Err(e);}};
             for (number,_)in &wanted{let mut f=tokio::fs::File::open(app.cfg.data.join("temp").join(format!("mp-{id}-{number}.part"))).await?;tokio::io::copy(&mut f,&mut out).await?;}out.sync_all().await?;drop(out);
             let n=storage::await_job(app,&job.id).await?;let etag=format!("{}-{}",hex::encode(md5.finalize()),wanted.len());sqlx::query("UPDATE nodes SET etag=? WHERE id=?").bind(&etag).bind(&n.id).execute(&app.db).await?;remove_multipart(app,id).await?;
             Ok(xml(StatusCode::OK,format!("<CompleteMultipartUploadResult xmlns=\"{NS}\"><Location>{}/s3/itclub-cloud/{}</Location><Bucket>itclub-cloud</Bucket><Key>{}</Key><ETag>&quot;{etag}&quot;</ETag></CompleteMultipartUploadResult>",escape(&app.cfg.origin),escape(&webdav::encode_path(key)),escape(key))))

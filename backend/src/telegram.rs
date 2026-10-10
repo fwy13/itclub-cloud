@@ -96,7 +96,9 @@ impl Telegram {
         if let Ok(id)=saved.parse::<i64>() {self.call("main",json!({"@type":"getChat","chat_id":id})).await?;Ok(id)}
         else {let chat=self.call("main",json!({"@type":"searchPublicChat","username":saved.trim_start_matches('@')})).await?;chat["id"].as_i64().context("Không tìm thấy nhóm")}
     }
-    pub async fn send_document(&self,a:&Account,chat:i64,path:&std::path::Path,caption:&str,cancel:&CancellationToken,progress:impl Fn(u64)+Send)->Result<Value> {
+    pub async fn send_document<F,Fut>(&self,a:&Account,chat:i64,path:&std::path::Path,caption:&str,cancel:&CancellationToken,mut progress:F)->Result<Value>
+    where F:FnMut(u64)->Fut+Send,Fut:std::future::Future<Output=()>+Send {
+        let file_size=tokio::fs::metadata(path).await?.len();
         let hub=self.hub.as_ref().context("TDLib unavailable")?;
         // Subscribe before sendMessage; even small uploads can complete before its response.
         let mut updates=hub.events.subscribe();
@@ -118,17 +120,24 @@ impl Telegram {
             }
         })).await?;
         let pending=result["id"].as_i64().context("sendMessage returned no ID")?;
-        if result.get("sending_state").map(Value::is_null).unwrap_or(true){return Ok(result);}
+        if result.get("sending_state").map(Value::is_null).unwrap_or(true){progress(file_size).await;return Ok(result);}
         let fid=media_file(&result).and_then(|f|f["id"].as_i64()).unwrap_or(0);
         let mut ticker=tokio::time::interval(Duration::from_secs(1));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_report=Instant::now();
+        let mut reported=0u64;
         let deadline=tokio::time::sleep(Duration::from_secs(24*3600));tokio::pin!(deadline);
         loop {tokio::select!{
             _=cancel.cancelled()=>{let _=hub.call(a.client,json!({"@type":"deleteMessages","chat_id":chat,"message_ids":[pending],"revoke":true})).await;bail!("Đã hủy upload");},
             _=&mut deadline=>bail!("Upload quá thời hạn"),
-            _=ticker.tick()=>{if fid!=0 {if let Ok(f)=hub.call(a.client,json!({"@type":"getFile","file_id":fid})).await {progress(f["remote"]["uploaded_size"].as_u64().unwrap_or(0));}}},
+            _=ticker.tick()=>{if fid!=0 {if let Ok(f)=hub.call(a.client,json!({"@type":"getFile","file_id":fid})).await {let done=f["remote"]["uploaded_size"].as_u64().unwrap_or(0).min(file_size);if done>reported{reported=done;progress(done).await;last_report=Instant::now();}}}},
             event=updates.recv()=>{match event {
-                Ok(v) if v["@client_id"].as_i64()==Some(a.client as i64)&&v["old_message_id"].as_i64()==Some(pending)=>{
-                    match v["@type"].as_str(){Some("updateMessageSendSucceeded")=>return Ok(v["message"].clone()),Some("updateMessageSendFailed")=>{
+                Ok(v) if v["@client_id"].as_i64()==Some(a.client as i64)&&v["@type"]=="updateFile"&&v["file"]["id"].as_i64()==Some(fid)=>{
+                    let done=v["file"]["remote"]["uploaded_size"].as_u64().unwrap_or(0).min(file_size);
+                    if done>reported&&(last_report.elapsed()>=Duration::from_millis(500)||done==file_size){reported=done;progress(done).await;last_report=Instant::now();}
+                },
+                Ok(v) if v["@client_id"].as_i64()==Some(a.client as i64)&&v["message"]["chat_id"].as_i64()==Some(chat)&&v["old_message_id"].as_i64()==Some(pending)=>{
+                    match v["@type"].as_str(){Some("updateMessageSendSucceeded")=>{progress(file_size).await;return Ok(v["message"].clone());},Some("updateMessageSendFailed")=>{
                         let e=v["error"]["message"].as_str().unwrap_or("Telegram không gửi được file");
                         *a.cooldown.write().await=Instant::now()+Duration::from_secs(30);bail!("{e}");},_=>{}}
                 },
@@ -136,7 +145,7 @@ impl Telegram {
                     // A missed success update cannot safely be retried by sending another file.
                     // Reconcile from a stable unique caption in the upload journal instead.
                     let found=hub.call(a.client,json!({"@type":"searchChatMessages","chat_id":chat,"query":caption,"from_message_id":0,"offset":0,"limit":5,"filter":{"@type":"searchMessagesFilterDocument"},"message_thread_id":0,"saved_messages_topic_id":0})).await;
-                    if let Ok(v)=found {if let Some(m)=v["messages"].as_array().and_then(|x|x.first()){return Ok(m.clone());}}
+                    if let Ok(v)=found {if let Some(m)=v["messages"].as_array().and_then(|x|x.iter().find(|m| m["sending_state"].is_null() && m["content"]["caption"]["text"].as_str()==Some(caption))){progress(file_size).await;return Ok(m.clone());}}
                 },Err(_)=>bail!("Telegram update stream closed"),
             }}
         }}

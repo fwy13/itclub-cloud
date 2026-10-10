@@ -93,7 +93,7 @@ pub async fn put_body(app:&App,u:&User,name:&str,parent:Option<String>,mime:&str
     use sha2::{Digest,Sha256};
     let job=storage::create_job(app,u,name,parent,0,mime,"staging",replace).await?;
     let mut stream=body.into_data_stream();let mut file=tokio::fs::File::create(app.cfg.upload_path(&job.id)).await?;let mut size=0u64;let mut hash=Sha256::new();
-    let result:Result<()>=async {while let Some(chunk)=stream.next().await{let chunk=chunk.map_err(|e|Error::bad(e.to_string()))?;size+=chunk.len() as u64;if size>app.cfg.max_upload{return Err(Error::bad("File vượt dung lượng cho phép"));}hash.update(&chunk);file.write_all(&chunk).await?;}file.sync_all().await?;Ok(())}.await;
+    let result:Result<()>=async {while let Some(chunk)=stream.next().await{let chunk=chunk.map_err(|e|Error::bad(e.to_string()))?;size+=chunk.len() as u64;if size>app.cfg.max_upload{return Err(Error::bad("File vượt dung lượng cho phép"));}hash.update(&chunk);crate::disk::write(app,&mut file,&chunk,true).await?;}file.sync_all().await?;Ok(())}.await;
     if let Err(e)=result{drop(file);let _=storage::discard_staging(app,&job.id).await;app.progress(&job.id,"error",0,0,Some(&e.1)).await;return Err(e);}drop(file);
     if let Some(expected)=expected_hash.filter(|x|*x!="UNSIGNED-PAYLOAD"){if hex::encode(hash.finalize())!=expected{let _=storage::discard_staging(app,&job.id).await;app.progress(&job.id,"error",0,0,Some("Payload hash mismatch")).await;return Err(Error::bad("Payload hash mismatch"));}}
     sqlx::query("UPDATE jobs SET size=? WHERE id=?").bind(size as i64).bind(&job.id).execute(&app.db).await?;

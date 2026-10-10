@@ -43,6 +43,7 @@ export async function uploadFile(file: File, parent: string | null, user: User, 
     job = await post<Job>('/api/uploads', { name: file.name, size: file.size, parent_id: parent || null, mime: file.type || undefined });
     localStorage.setItem(key, job.id);
   }
+  progress?.({ name: file.name, id: job.id, percent: Math.round(received.reduce((sum, index) => sum + Math.min(job!.chunk_size, file.size - index * job!.chunk_size), 0) / Math.max(1, file.size) * 100) });
   const currentJob = job;
   const count = Math.ceil(file.size / job.chunk_size);
   const completed = new Set(received);

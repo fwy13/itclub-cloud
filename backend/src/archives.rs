@@ -2,7 +2,7 @@ use crate::{db::{self,Node,User},error::{Error,Result},state::App,storage};
 use axum::{extract::{State,Path,Query},Extension,Json,body::Body,response::{Response,IntoResponse}};
 use serde::Deserialize;
 use serde_json::{json,Value};
-use std::{path::PathBuf,io::{Read,Write}};
+use std::{path::PathBuf,io::{Read,Write,Seek}};
 use tokio::io::AsyncReadExt;
 
 pub struct RemoveOnDrop(pub PathBuf);
@@ -19,14 +19,21 @@ pub async fn folder_zip(State(app):State<App>,Extension(u):Extension<User>,Path(
     let nodes=db::descendants(&app.db,&u.id,&id).await?;let total:i64=nodes.iter().filter(|n|n.deleted_at.is_none()).map(|n|n.size).sum();
     if total as u64>app.cfg.max_upload{return Err(Error::bad("Thư mục vượt giới hạn ZIP; tải từng file hoặc dùng WebDAV"));}
     let output=app.cfg.data.join("temp").join(format!("folder-{}.zip",db::id()));let guard=RemoveOnDrop(output.clone());
-    let mut writer=zip::ZipWriter::new(std::fs::File::create(&output)?);let prefix=db::full_path(&app.db,&root).await?;
+    let prefix=db::full_path(&app.db,&root).await?;
+    let mut entries=Vec::new();let mut reserved=(total.max(0) as u64).saturating_add(1024);
     for n in nodes.into_iter().filter(|n|n.deleted_at.is_none()) {
         let full=db::full_path(&app.db,&n).await?;let name=full.strip_prefix(prefix.as_str()).unwrap_or(&full).trim_start_matches('/').to_owned();if name.is_empty(){continue;}
+        reserved=reserved.saturating_add((name.len() as u64)*2+512);
+        entries.push((n,name));
+    }
+    let output_file=crate::disk::create_sized(&app,&output,reserved,false).await?.into_std().await;
+    let mut writer=zip::ZipWriter::new(output_file);
+    for (n,name) in entries {
         if n.kind=="folder"{writer.add_directory(format!("{name}/"),zip::write::SimpleFileOptions::default()).map_err(anyhow::Error::from)?;continue;}
         let temp=app.cfg.data.join("temp").join(format!("zip-entry-{}",db::id()));let temp_guard=RemoveOnDrop(temp.clone());storage::materialize(&app,&n,&temp).await?;
         writer=tokio::task::spawn_blocking(move||->anyhow::Result<_>{writer.start_file(name,zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored))?;let mut file=std::fs::File::open(temp)?;std::io::copy(&mut file,&mut writer)?;Ok(writer)}).await.map_err(anyhow::Error::from)??;drop(temp_guard);
     }
-    tokio::task::spawn_blocking(move||writer.finish()).await.map_err(anyhow::Error::from)?.map_err(anyhow::Error::from)?;
+    tokio::task::spawn_blocking(move||->anyhow::Result<()>{let mut file=writer.finish()?;let length=file.stream_position()?;file.set_len(length)?;Ok(())}).await.map_err(anyhow::Error::from)??;
     // The response owns cleanup; don't remove before ReaderStream opens the file.
     let res=download_temp(output,&format!("{}.zip",root.name)).await?;std::mem::forget(guard);Ok(res)
 }

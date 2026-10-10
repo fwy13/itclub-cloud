@@ -38,7 +38,7 @@ pub async fn public_info(State(app):State<App>,Path(token):Path<String>,Query(q)
 }
 pub async fn unlock(State(app):State<App>,ConnectInfo(addr):ConnectInfo<SocketAddr>,Path(token):Path<String>,Json(p):Json<Value>)->Result<Response>{
     auth::rate(&app,format!("share:{}",addr.ip())).await?;let share=lookup(&app,&token).await?;
-    if let Some(hash)=share.password_hash{if !crypto::verify(p["password"].as_str().unwrap_or("").into(),hash).await{return Err(Error::unauthorized());}}
+    if let Some(hash)=share.password_hash{if !crypto::verify(p["password"].as_str().unwrap_or("").into(),hash).await{return Err(Error(StatusCode::FORBIDDEN,"Mật khẩu chia sẻ không đúng. Vui lòng thử lại.".into()));}}
     let session=crypto::random_token();sqlx::query("INSERT INTO share_sessions(token_hash,share_token,expires_at) VALUES(?,?,?)").bind(crypto::sha(&session)).bind(&token).bind(db::now()+86400).execute(&app.db).await?;
     Ok(([(header::SET_COOKIE,format!("tc_share_{}={session}; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400{}",&token[..12],if app.cfg.secure_cookie{"; Secure"}else{""}))],Json(json!({"ok":true}))).into_response())
 }

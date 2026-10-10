@@ -51,15 +51,17 @@ async fn receive(app:App,account:&str,sender:i64,message:Value)->anyhow::Result<
     let cancel=CancellationToken::new();app.cancel.lock().await.insert(job.id.clone(),cancel.clone());
     let result:crate::error::Result<()>=async {
         let _slot=app.downloads.clone().acquire_owned().await.map_err(anyhow::Error::from)?;
+        crate::disk::require_free(&app,size.max(0) as u64).await?;
         app.tg.call(account,json!({"@type":"downloadFile","file_id":fid,"priority":8,"offset":0,"limit":0,"synchronous":false})).await?;
         let path=loop{
+            if let Err(e)=crate::disk::check(&app).await{let _=app.tg.call(account,json!({"@type":"cancelDownloadFile","file_id":fid,"only_if_pending":false})).await;return Err(e);}
             if cancel.is_cancelled(){let _=app.tg.call(account,json!({"@type":"cancelDownloadFile","file_id":fid,"only_if_pending":false})).await;return Err(crate::error::Error::bad("Đã hủy"));}
             let f=app.tg.call(account,json!({"@type":"getFile","file_id":fid})).await?;
             app.progress(&job.id,"downloading",f["local"]["downloaded_size"].as_u64().unwrap_or(0),size as u64,None).await;
             if f["local"]["is_downloading_completed"]==true{break f["local"]["path"].as_str().unwrap_or("").to_owned();}
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
-        tokio::fs::copy(path,app.cfg.upload_path(&job.id)).await?;drop(_slot);
+        crate::disk::copy(&app,std::path::Path::new(&path),&app.cfg.upload_path(&job.id),true).await?;drop(_slot);
         storage::upload(&app,&job.id,&cancel).await?;Ok(())
     }.await;
     match result{Ok(())=>reply(&app,account,sender,&format!("Đã lưu: {name}")).await,Err(e)=>{app.progress(&job.id,"error",0,0,Some(&e.1)).await;reply(&app,account,sender,"Không lưu được file. Xem chi tiết trong trang Tác vụ của ITClub Cloud.").await;}}

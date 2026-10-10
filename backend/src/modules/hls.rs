@@ -49,7 +49,7 @@ pub async fn download(ctx:&ModuleContext,url:&str,headers:&Headers)->Result<Path
             let r=ctx.get(&url,headers).await?;let mut stream=r.bytes_stream();let mut out=tokio::fs::File::create(path).await?;let mut size=0u64;
             while let Some(b)=stream.next().await {ctx.check_cancelled()?;let b=b?;size+=b.len() as u64;
                 if size>64*1024*1024{anyhow::bail!("Segment quá lớn");}
-                let bytes=transferred.fetch_add(b.len() as u64,Ordering::Relaxed)+b.len() as u64;if bytes>ctx.app.cfg.max_upload{anyhow::bail!("Video vượt giới hạn dung lượng");}out.write_all(&b).await?;
+                let bytes=transferred.fetch_add(b.len() as u64,Ordering::Relaxed)+b.len() as u64;if bytes>ctx.app.cfg.max_upload{anyhow::bail!("Video vượt giới hạn dung lượng");}crate::disk::write(&ctx.app,&mut out,&b,true).await?;
             }
             out.flush().await?;let n=count.fetch_add(1,Ordering::Relaxed)+1;ctx.progress("segments",n,total).await;Ok::<(),anyhow::Error>(())
         }
@@ -62,7 +62,8 @@ pub async fn download(ctx:&ModuleContext,url:&str,headers:&Headers)->Result<Path
     command.args(["-nostdin","-y","-hide_banner","-loglevel","error","-protocol_whitelist","file,crypto,data","-allowed_extensions","ALL","-i"]).arg(manifest)
         .args(["-c","copy","-movflags","+faststart"]).arg(&output).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     let child=command.spawn().context("Không chạy được FFmpeg")?;
-    let result=tokio::select!{_=ctx.cancel.cancelled()=>anyhow::bail!("Đã hủy mux"),r=child.wait_with_output()=>r?};
+    let watchdog=async {loop {crate::disk::check(&ctx.app).await?;tokio::time::sleep(std::time::Duration::from_millis(500)).await;} #[allow(unreachable_code)] Ok::<(),crate::error::Error>(())};
+    let result=tokio::select!{_=ctx.cancel.cancelled()=>anyhow::bail!("Đã hủy mux"),limit=watchdog=>{limit?;anyhow::bail!("Dừng mux do giới hạn SSD");},r=child.wait_with_output()=>r?};
     if !result.status.success(){anyhow::bail!("FFmpeg: {}",String::from_utf8_lossy(&result.stderr));}
     Ok(output)
 }

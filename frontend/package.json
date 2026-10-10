@@ -1,6 +1,6 @@
 {
   "name": "itclub-cloud-web",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -15,7 +15,14 @@
     "lucide-react": "^0.468.0",
     "qrcode.react": "^4.2.0",
     "epubjs": "^0.3.93",
-    "@fontsource/open-sans": "^5.0.13"
+    "@fontsource/open-sans": "^5.0.13",
+    "mammoth": "^1.9.0",
+    "dompurify": "^3.2.6",
+    "exceljs": "^4.4.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "fflate": "^0.8.2",
+    "papaparse": "^5.5.3"
   },
   "devDependencies": {
     "vite": "^6.1.0",
@@ -25,6 +32,7 @@
     "@types/react-dom": "^19.0.0",
     "@types/node": "^22.0.0",
     "tailwindcss": "^4.1.0",
-    "@tailwindcss/vite": "^4.1.0"
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/papaparse": "^5.3.16"
   }
 }

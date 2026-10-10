@@ -20,6 +20,8 @@ pub struct Config {
     pub remote_parallel: usize,
     pub cache_bytes: u64,
     pub td_cache_bytes: u64,
+    pub ssd_temp_limit: u64,
+    pub ssd_min_free: u64,
     pub secure_cookie: bool,
     pub ffmpeg: String,
     pub ytdlp: String,
@@ -56,6 +58,8 @@ impl Config {
             max_parallel: number("MAX_PARALLEL_UPLOADS",2).clamp(1,16) as usize,
             remote_parallel: number("MAX_PARALLEL_DOWNLOADS",2).clamp(1,8) as usize,
             cache_bytes: number("MEMORY_CACHE_MIB",64).clamp(1,1024)*1024*1024,
+            ssd_temp_limit: number("SSD_TEMP_LIMIT_GIB",20).min(1048576)*1024*1024*1024,
+            ssd_min_free: number("SSD_MIN_FREE_GIB",2).min(1048576)*1024*1024*1024,
             td_cache_bytes: number("TDLIB_CACHE_MIB",1024).max(64)*1024*1024,
             ffmpeg:get("FFMPEG_PATH","ffmpeg"), ytdlp:get("YTDLP_PATH","yt-dlp"), aria2:get("ARIA2_PATH","aria2c"),
         })

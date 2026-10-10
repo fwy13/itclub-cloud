@@ -83,7 +83,21 @@ pub async fn change_password(State(app):State<App>,Extension(u):Extension<User>,
     let mut tx=app.db.begin().await?;sqlx::query("UPDATE users SET password_hash=? WHERE id=?").bind(hash).bind(&u.id).execute(&mut *tx).await?;sqlx::query("DELETE FROM sessions WHERE user_id=?").bind(&u.id).execute(&mut *tx).await?;tx.commit().await?;
     db::audit(&app.db,&u.id,"password_changed","").await;Ok(Json(json!({"ok":true})))
 }
-pub async fn list_users(State(app):State<App>,Extension(u):Extension<User>)->Result<Json<Vec<User>>> {u.admin()?;Ok(Json(sqlx::query_as("SELECT * FROM users ORDER BY created_at").fetch_all(&app.db).await?))}
+pub async fn list_users(State(app):State<App>,Extension(u):Extension<User>)->Result<Json<Value>> {
+    u.admin()?;
+    let users:Vec<User>=sqlx::query_as("SELECT * FROM users ORDER BY created_at").fetch_all(&app.db).await?;
+    let stats:Vec<(String,i64,i64,i64,i64)>=sqlx::query_as(
+        "SELECT u.id,COALESCE(s.uploaded_bytes,0),COALESCE(s.uploaded_files,0),COALESCE(n.used_bytes,0),COALESCE(n.file_count,0) FROM users u LEFT JOIN user_upload_stats s ON s.user_id=u.id LEFT JOIN (SELECT owner,SUM(size) AS used_bytes,COUNT(*) AS file_count FROM nodes WHERE kind='file' GROUP BY owner) n ON n.owner=u.id"
+    ).fetch_all(&app.db).await?;
+    let stats:std::collections::HashMap<_,_>=stats.into_iter().map(|(id,b,c,used,files)|(id,(b,c,used,files))).collect();
+    let result:Vec<Value>=users.into_iter().map(|user|{
+        let (uploaded,uploads,used,files)=stats.get(&user.id).copied().unwrap_or_default();
+        let mut value=json!(user);
+        value["uploaded_bytes"]=json!(uploaded);value["uploaded_files"]=json!(uploads);
+        value["used_bytes"]=json!(used);value["file_count"]=json!(files);value
+    }).collect();
+    Ok(Json(json!(result)))
+}
 #[derive(Deserialize)]pub struct CreateUser {username:String,password:String,#[serde(default)]quota_bytes:i64}
 pub async fn create_user(State(app):State<App>,Extension(u):Extension<User>,Json(p):Json<CreateUser>)->Result<Json<Value>> {
     u.admin()?;valid_username(&p.username)?;if p.quota_bytes<0{return Err(Error::bad("Quota không hợp lệ"));}let id=db::id();let hash=crypto::password_hash(p.password).await?;

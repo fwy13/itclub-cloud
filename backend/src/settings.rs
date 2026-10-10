@@ -9,6 +9,7 @@ pub async fn get(State(app):State<App>,Extension(u):Extension<User>)->Result<Jso
     let access:Option<String>=sqlx::query_scalar("SELECT s3_access FROM users WHERE id=?").bind(&u.id).fetch_one(&app.db).await?;
     let mut value=json!({"user":u,"public_url":app.cfg.origin,"api_enabled":api_enabled,"s3_access_key":access,"max_upload_bytes":app.cfg.max_upload,"part_size":app.cfg.part_size});
     if u.role=="admin" {
+        value["disk"]=json!(crate::disk::usage(&app).await?);
         value["telegram"]=app.tg.status().await;
         value["max_parallel_uploads"]=json!(app.cfg.max_parallel);
         value["storage_chat"]=json!(db::setting(&app.db,"storage_chat").await.unwrap_or_else(||"me".into()));

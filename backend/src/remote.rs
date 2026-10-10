@@ -57,7 +57,7 @@ pub(crate) async fn download_url(app:&App,_u:&User,job:&Job,url:&str,headers:&cr
     let mime=response.headers().get(reqwest::header::CONTENT_TYPE).and_then(|h|h.to_str().ok()).map(|s|s.split(';').next().unwrap_or(s).to_owned()).unwrap_or_else(||mime_guess::from_path(&job.name).first_or_octet_stream().to_string());
     let mut body=response.bytes_stream();let mut out=tokio::fs::File::create(app.cfg.upload_path(&job.id)).await?;let mut total=0u64;let mut last=std::time::Instant::now();
     loop {let part=tokio::select!{_=cancel.cancelled()=>return Err(Error::bad("Đã hủy")),p=body.next()=>p};let Some(part)=part else{break;};let bytes=part.map_err(anyhow::Error::from)?;
-        total+=bytes.len() as u64;if total>app.cfg.max_upload{return Err(Error::bad("File vượt giới hạn dung lượng"));}out.write_all(&bytes).await?;
+        total+=bytes.len() as u64;if total>app.cfg.max_upload{return Err(Error::bad("File vượt giới hạn dung lượng"));}crate::disk::write(app,&mut out,&bytes,true).await?;
         if last.elapsed()>Duration::from_millis(500){app.progress(&job.id,"downloading",total,size,None).await;last=std::time::Instant::now();}
     }
     out.sync_all().await?;drop(out);if size>0&&total!=size{return Err(Error::bad("Nguồn tải trả thiếu dữ liệu"));}
@@ -84,8 +84,10 @@ pub(crate) async fn download_telegram(app:&App,_u:&User,job:&Job,url:&str,cancel
     let message=&info["message"];let file=crate::telegram::media_file(message).ok_or_else(||Error::bad("Không đọc được file; tài khoản Telegram cần quyền truy cập tin nhắn"))?;
     let size=file["size"].as_u64().unwrap_or(0);if size>app.cfg.max_upload{return Err(Error::bad("File quá lớn"));}
     let id=file["id"].as_i64().ok_or_else(||Error::bad("Không có file ID"))?;
+    crate::disk::require_free(app,size).await?;
     app.tg.call("main",json!({"@type":"downloadFile","file_id":id,"priority":16,"offset":0,"limit":0,"synchronous":false})).await?;
     let path=loop {
+        if let Err(e)=crate::disk::check(app).await{let _=app.tg.call("main",json!({"@type":"cancelDownloadFile","file_id":id,"only_if_pending":false})).await;return Err(e);}
         if cancel.is_cancelled(){let _=app.tg.call("main",json!({"@type":"cancelDownloadFile","file_id":id,"only_if_pending":false})).await;return Err(Error::bad("Đã hủy"));}
         let downloaded=app.tg.call("main",json!({"@type":"getFile","file_id":id})).await?;
         app.progress(&job.id,"downloading",downloaded["local"]["downloaded_size"].as_u64().unwrap_or(0),size,None).await;
@@ -93,7 +95,7 @@ pub(crate) async fn download_telegram(app:&App,_u:&User,job:&Job,url:&str,cancel
         tokio::select!{_=cancel.cancelled()=>{},_=tokio::time::sleep(Duration::from_secs(1))=>{}}
     };
     let name=message["content"]["document"]["file_name"].as_str().or_else(||message["content"]["video"]["file_name"].as_str()).filter(|s|!s.is_empty()).unwrap_or(&job.name);
-    db::valid_name(name)?;tokio::fs::copy(path,app.cfg.upload_path(&job.id)).await?;
+    db::valid_name(name)?;crate::disk::copy(app,std::path::Path::new(&path),&app.cfg.upload_path(&job.id),true).await?;
     let actual=tokio::fs::metadata(app.cfg.upload_path(&job.id)).await?.len();let mime=mime_guess::from_path(name).first_or_octet_stream().to_string();
     sqlx::query("UPDATE jobs SET name=?,size=?,mime=? WHERE id=?").bind(name).bind(actual as i64).bind(mime).bind(&job.id).execute(&app.db).await?;
     crate::downloads::staged(app,&job.id).await?;
@@ -105,13 +107,14 @@ pub(crate) async fn external(app:&App,u:&User,job:&Job,kind:&str,url:&str,cancel
     else {let mut c=tokio::process::Command::new(&app.cfg.aria2);c.args(["--no-conf=true","--enable-rpc=false","--seed-time=0","--file-allocation=none","--allow-overwrite=false","--auto-file-renaming=true","--bt-max-peers=24","--max-concurrent-downloads=2","--summary-interval=0","--dir"]).arg(&dir).arg("--").arg(url);c};
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(unix)]{cmd.process_group(0);}
+    crate::disk::check(app).await?;
     let mut child=cmd.spawn().map_err(|e|Error::bad(format!("Không chạy được {kind}: {e}")))?;
     let stderr=child.stderr.take();let log_task=tokio::spawn(async move{let mut tail=Vec::new();if let Some(mut stderr)=stderr{let mut buf=[0;1024];while let Ok(n)=stderr.read(&mut buf).await{if n==0{break;}tail.extend_from_slice(&buf[..n]);if tail.len()>8192{tail.drain(..tail.len()-8192);}}}String::from_utf8_lossy(&tail).into_owned()});
     let mut ticker=tokio::time::interval(Duration::from_secs(2));
     let result=loop{tokio::select!{
         status=child.wait()=>break status?,
         _=cancel.cancelled()=>{kill_group(&mut child).await;let _=tokio::fs::remove_dir_all(&dir).await;log_task.abort();return Err(Error::bad("Đã hủy"));},
-        _=ticker.tick()=>{let bytes=directory_files(&dir).await?.iter().map(|(_,n)|*n).sum::<u64>();if bytes>app.cfg.max_upload{kill_group(&mut child).await;let _=tokio::fs::remove_dir_all(&dir).await;log_task.abort();return Err(Error::bad("Nguồn tải vượt giới hạn dung lượng"));}app.progress(&job.id,"downloading",bytes,0,None).await;}
+        _=ticker.tick()=>{if let Err(e)=crate::disk::check(app).await{kill_group(&mut child).await;let _=tokio::fs::remove_dir_all(&dir).await;log_task.abort();return Err(e);}let bytes=directory_files(&dir).await?.iter().map(|(_,n)|*n).sum::<u64>();if bytes>app.cfg.max_upload{kill_group(&mut child).await;let _=tokio::fs::remove_dir_all(&dir).await;log_task.abort();return Err(Error::bad("Nguồn tải vượt giới hạn dung lượng"));}app.progress(&job.id,"downloading",bytes,0,None).await;}
     }};
     let log=log_task.await.unwrap_or_default();if !result.success(){return Err(Error::bad(format!("{kind} thất bại: {log}")));}
     let files:Vec<_>=directory_files(&dir).await?.into_iter().filter(|(p,_)|!matches!(p.extension().and_then(|s|s.to_str()),Some("aria2"|"part"|"ytdl"))).collect();

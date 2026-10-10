@@ -5,11 +5,11 @@ mod config;
 mod crypto;
 mod db;
 mod downloads;
+mod disk;
 mod error;
 mod files;
 mod inbox;
 mod modules;
-mod passkey;
 mod remote;
 mod s3;
 mod settings;
@@ -55,8 +55,6 @@ async fn main()->anyhow::Result<()> {
         .route("/api/auth/setup",post(auth::setup))
         .route("/api/auth/login",post(auth::login))
         .route("/api/auth/logout",post(auth::logout))
-        .route("/api/auth/passkey/begin",post(passkey::login_begin))
-        .route("/api/auth/passkey/finish",post(passkey::login_finish))
         .route("/api/public/shares/{token}",get(shares::public_info))
         .route("/api/public/shares/{token}/unlock",post(shares::unlock))
         .route("/api/public/shares/{token}/stream",get(shares::public_stream).head(shares::public_stream))
@@ -98,10 +96,6 @@ async fn main()->anyhow::Result<()> {
         .route("/api/profile/password",post(auth::change_password))
         .route("/api/profile/keys",post(auth::keys))
         .route("/api/profile/telegram/link",post(inbox::link_code).delete(inbox::unlink))
-        .route("/api/profile/passkeys",get(passkey::list))
-        .route("/api/profile/passkeys/begin",post(passkey::register_begin))
-        .route("/api/profile/passkeys/finish",post(passkey::register_finish))
-        .route("/api/profile/passkeys/{id}",delete(passkey::remove))
         .route("/api/admin/users",get(auth::list_users).post(auth::create_user))
         .route("/api/admin/users/{id}",put(auth::edit_user).delete(files::delete_user))
         .route("/api/admin/audit",get(settings::audit))

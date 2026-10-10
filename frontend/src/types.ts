@@ -9,10 +9,12 @@ export interface ShareLink { token: string; name: string; protected: boolean; do
 export interface PublicShareData { node: CloudNode; children: CloudNode[] }
 export interface TelegramAccount { key: string; bot: boolean; cooldown_seconds: number; state: { '@type'?: string; error?: string; link?: string }; me?: { id: number | null; first_name: string | null } }
 export interface TelegramStatus { available: boolean; error?: string | null; accounts: TelegramAccount[] }
-export interface SettingsData { user: User; public_url: string; part_size: number; telegram?: TelegramStatus; storage_chat?: string; telegram_api_id?: number; backup_enabled?: boolean; last_backup?: string | null; bots?: { id: string; name: string }[]; max_parallel_uploads?: number }
+export interface DiskUsage { temporary_bytes: number; temporary_limit_bytes: number; available_bytes: number; minimum_free_bytes: number; upload_headroom_bytes: number; tdlib_cache_bytes_per_account: number }
+export interface SettingsData { disk?: DiskUsage; user: User; public_url: string; part_size: number; telegram?: TelegramStatus; storage_chat?: string; telegram_api_id?: number; backup_enabled?: boolean; last_backup?: string | null; bots?: { id: string; name: string }[]; max_parallel_uploads?: number }
 export interface Chat { id: number; title: string }
-export interface Passkey { id: string; name: string; created_at: number }
 export interface UploadProgress { name: string; percent: number; id?: string; message?: string }
 export interface UploadState extends UploadProgress { active: boolean; count: number }
 export type Notify = (message: string, error?: boolean) => void;
 export type Action = (fn: () => Promise<unknown>, message?: string) => Promise<void>;
+
+export interface Member extends User { uploaded_bytes: number; uploaded_files: number; used_bytes: number; file_count: number }

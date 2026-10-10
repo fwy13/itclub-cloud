@@ -55,7 +55,7 @@ pub async fn upload(app:&App,id:&str,cancel:&CancellationToken)->Result<String> 
         if existing.is_some(){continue;}
         let part_path=app.cfg.data.join("temp").join(format!("{id}.{index}.part"));
         input.seek(SeekFrom::Start(start)).await?;
-        let mut output=tokio::fs::File::create(&part_path).await?;
+        let mut output=crate::disk::create_sized(app,&part_path,length,false).await?;
         let copied=tokio::io::copy(&mut (&mut input).take(length),&mut output).await?;
         output.flush().await?;drop(output);
         if copied!=length{return Err(Error::bad("Không đọc đủ dữ liệu của part"));}
@@ -64,10 +64,11 @@ pub async fn upload(app:&App,id:&str,cancel:&CancellationToken)->Result<String> 
         app.progress(id,"telegram",start,size,None).await;
         let progress_app=app.clone();let jid=id.to_string();
         let sent=app.tg.send_document(&account,chat,&part_path,&tag,cancel,move|n|{
-            let app=progress_app.clone();let jid=jid.clone();tokio::spawn(async move{app.progress(&jid,"telegram",start+n.min(length),size,None).await;});
+            let app=progress_app.clone();let jid=jid.clone();async move{app.progress(&jid,"telegram",start+n.min(length),size,None).await;}
         }).await?;
         let message_id=sent["id"].as_i64().ok_or_else(||Error::bad("Telegram không trả message ID"))?;
         sqlx::query("INSERT INTO job_parts(job_id,part_index,chat_id,message_id,account,size) VALUES(?,?,?,?,?,?)").bind(id).bind(index as i64).bind(chat).bind(message_id).bind(&account.key).bind(length as i64).execute(&app.db).await?;
+        app.progress(id,"telegram",start+length,size,None).await;
         let _=tokio::fs::remove_file(part_path).await;
     }
     if cancel.is_cancelled(){return Err(Error::bad("Đã hủy"));}
@@ -135,6 +136,7 @@ async fn block(app:&App,part:&Part,offset:u64,len:u64)->anyhow::Result<Bytes> {
     let fid=file["id"].as_i64().ok_or_else(||anyhow::anyhow!("Telegram file ID missing"))?;
     let mut last_error=String::new();
     for attempt in 0..3 {
+        crate::disk::require_free(app,len).await?;
         let result=app.tg.call(key,json!({"@type":"downloadFile","file_id":fid,"priority":32,"offset":offset,"limit":len,"synchronous":true})).await;
         match result {
             Ok(f)=>{
@@ -204,7 +206,7 @@ pub async fn serve(app:App,node:Node,headers:HeaderMap,head:bool,download:bool)-
 pub async fn materialize(app:&App,node:&Node,path:&Path)->Result<()> {
     use futures_util::StreamExt;
     let parts=parts(app,&node.id).await?;let stream=byte_stream(app.clone(),parts,0,node.size.saturating_sub(1) as u64);tokio::pin!(stream);
-    let mut file=tokio::fs::File::create(path).await?;let mut written=0;
+    let mut file=crate::disk::create_sized(app,path,node.size.max(0) as u64,false).await?;let mut written=0;
     while let Some(b)=stream.next().await{let b=b?;written+=b.len() as i64;file.write_all(&b).await?;}
     file.flush().await?;if written!=node.size{return Err(Error::bad("Tải file không đủ dữ liệu"));}Ok(())
 }

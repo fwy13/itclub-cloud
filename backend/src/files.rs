@@ -97,7 +97,11 @@ pub async fn thumb(State(app):State<App>,Extension(u):Extension<User>,Path(id):P
 pub async fn begin_upload(State(app):State<App>,Extension(u):Extension<User>,Json(p):Json<BeginUpload>)->Result<Json<crate::db::Job>> {
     let mime=p.mime.filter(|m|!m.is_empty()).unwrap_or_else(||mime_guess::from_path(&p.name).first_or_octet_stream().to_string());
     let job=storage::create_job(&app,&u,&p.name,p.parent_id,p.size,&mime,"staging",p.replace_id).await?;
-    let f=tokio::fs::File::create(app.cfg.upload_path(&job.id)).await?;f.set_len(p.size as u64).await?;Ok(Json(job))
+    if let Err(e)=crate::disk::create_sized(&app,&app.cfg.upload_path(&job.id),p.size as u64,true).await {
+        app.progress(&job.id,"error",0,p.size as u64,Some(&e.1)).await;
+        return Err(e);
+    }
+    Ok(Json(job))
 }
 pub async fn upload_status(State(app):State<App>,Extension(u):Extension<User>,Path(id):Path<String>)->Result<Json<Value>> {
     let job=storage::get_job(&app,&u.id,&id).await?;let chunks:Vec<i64>=sqlx::query_scalar("SELECT chunk_index FROM chunks WHERE job_id=? ORDER BY chunk_index").bind(&id).fetch_all(&app.db).await?;
